@@ -119,7 +119,7 @@ impl WebSocketInterface {
     pub async fn connect(self: &Arc<Self>, options: ConnectOptions) -> ConnectResult<Error> {
         let this = self.clone();
         let proxy_addr = "your_proxy_address:port".to_string(); // Your SOCKS5 proxy address
-        let target_url =this.url().clone().expect("missing URL");
+        let target_url = this.url().clone().expect("missing URL");
         if self.is_open.load(Ordering::SeqCst) {
             return Err(Error::AlreadyConnected);
         }
@@ -142,6 +142,20 @@ impl WebSocketInterface {
 
         core::task::spawn(async move {
             loop {
+                        // Resolve the WebSocket host to an address
+        let target_addr = match target_url.replace("ws://", "").replace("wss://", "").to_socket_addrs().await {
+            Ok(mut addrs) => match addrs.next() {
+                Some(addr) => addr,
+                None => {
+                    log_trace!("Failed to resolve WebSocket address");
+                    break;
+                }
+            },
+            Err(e) => {
+                log_trace!("Failed to resolve WebSocket address: {}", e);
+                break;
+            }
+        };
             // Connect to the target through the SOCKS5 proxy
             let connect_future = async {
                 match Socks5Stream::connect(proxy_addr, target_addr).await {
