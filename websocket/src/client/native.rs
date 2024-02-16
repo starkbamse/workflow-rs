@@ -34,6 +34,8 @@ impl From<Message> for tungstenite::Message {
         }
     }
 }
+use std::time::Duration;
+use tokio_socks::tcp::Socks5Stream;
 
 impl From<tungstenite::Message> for Message {
     fn from(message: tungstenite::Message) -> Self {
@@ -116,7 +118,8 @@ impl WebSocketInterface {
 
     pub async fn connect(self: &Arc<Self>, options: ConnectOptions) -> ConnectResult<Error> {
         let this = self.clone();
-
+        let proxy_addr = "your_proxy_address:port".to_string(); // Your SOCKS5 proxy address
+        let target_url =this.url().clone().expect("missing URL");
         if self.is_open.load(Ordering::SeqCst) {
             return Err(Error::AlreadyConnected);
         }
@@ -139,8 +142,24 @@ impl WebSocketInterface {
 
         core::task::spawn(async move {
             loop {
-                let url = this.url().clone().expect("missing URL");
-                let connect_future = connect_async_with_config(&url, ts_websocket_config, false);
+            // Connect to the target through the SOCKS5 proxy
+            let connect_future = async {
+                match Socks5Stream::connect(proxy_addr, target_addr).await {
+                    Ok(socks_stream) => {
+                        // Convert tokio_socks tcp stream into tokio native tcp stream
+                        let tcp_stream = TcpStream::from_std(socks_stream.into_inner())?;
+
+                        // Now, use this tcp_stream with connect_async_with_config to upgrade to WS
+                        let url = target_url.clone();
+                        connect_async_with_config(url, None, Some(TsWebSocketConfig::default())).await
+                    },
+                    Err(e) => {
+                        log_trace!("Failed to connect through SOCKS5 proxy: {}", e);
+                        Err(e.into())
+                    }
+                }
+            };
+
                 let timeout_future = timeout(options_.connect_timeout(), connect_future);
 
                 match timeout_future.await {
